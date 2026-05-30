@@ -1,0 +1,75 @@
+name: Build & Push Images to GHCR
+
+# Builds the Warrior agent + frontend Docker images on GitHub-hosted runners
+# and pushes them to the GitHub Container Registry (GHCR). Runs automatically
+# on pushes to main that touch build inputs, and can be triggered manually.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "frontend/**"
+      - "docker/**"
+      - ".github/workflows/build-and-push.yml"
+  workflow_dispatch: {}
+
+env:
+  REGISTRY: ghcr.io
+  NAMESPACE: princekoya-multiverse
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: warrior-agent
+            dockerfile: docker/Dockerfile.agent
+          - image: warrior-frontend
+            dockerfile: docker/Dockerfile.frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  make-public:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Make container packages public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for pkg in warrior-agent warrior-frontend; do
+            echo "Setting $pkg public..."
+            curl -s -o /dev/null -w "$pkg -> %{http_code}\n" -X PATCH \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/user/packages/container/$pkg/visibility" \
+              -d '{"visibility":"public"}' || true
+          done
+          echo "If visibility could not be set by the workflow token, set it in the package settings UI."
