@@ -1,1 +1,0 @@
-{"root":["./src/App.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/AgentRoom.tsx","./src/components/AudioVisualizer.tsx","./src/components/ControlBar.tsx","./src/components/WarriorAvatar.tsx","./src/config/livekit.ts","./src/hooks/useAudioAmplitude.ts"],"version":"5.9.3"}
