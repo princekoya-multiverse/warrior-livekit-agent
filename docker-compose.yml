@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Warrior B.O.S.S. — local development stack
+#
+#   docker compose up --build
+#
+# Services:
+#   livekit-server  : WebRTC SFU (ports 7880/7881 + 50000-50200/udp)
+#   token-server    : mints LiveKit join tokens for the browser (:8080)
+#   agent           : the Python voice agent worker
+#   frontend        : Nginx serving the React SPA + proxying /api (:3000)
+#
+# Copy .env.example -> .env and fill in keys before running.
+# ─────────────────────────────────────────────────────────────────────────
+services:
+  livekit-server:
+    image: livekit/livekit-server:v1.8
+    command: --config /etc/livekit.yaml
+    restart: unless-stopped
+    volumes:
+      - ./livekit-server/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50200:50000-50200/udp"
+    networks: [warrior]
+
+  token-server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    command: uvicorn agent.token_server:app --host 0.0.0.0 --port 8080
+    restart: unless-stopped
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret_change_me_0123456789abcdef}
+      # URL the BROWSER uses to reach LiveKit (host machine).
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+      TOKEN_SERVER_CORS: "*"
+    ports:
+      - "8080:8080"
+    depends_on: [livekit-server]
+    networks: [warrior]
+
+  agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    command: python -m agent.main start
+    restart: unless-stopped
+    environment:
+      # Worker connects to LiveKit over the internal docker network.
+      LIVEKIT_URL: ws://livekit-server:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret_change_me_0123456789abcdef}
+      ABACUS_API_KEY: ${ABACUS_API_KEY:-}
+      ABACUS_BASE_URL: ${ABACUS_BASE_URL:-https://routellm.abacus.ai/v1}
+      ABACUS_MODEL: ${ABACUS_MODEL:-route-llm}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      STT_PROVIDER: ${STT_PROVIDER:-deepgram}
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+      TTS_VOICE: ${TTS_VOICE:-en-US-GuyNeural}
+    depends_on: [livekit-server]
+    networks: [warrior]
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on: [token-server]
+    networks: [warrior]
+
+networks:
+  warrior:
+    driver: bridge

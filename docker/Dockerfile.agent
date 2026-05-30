@@ -1,0 +1,29 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Agent worker image — Python + livekit-agents + Edge TTS
+# Build context: repo root.  Build: docker build -f docker/Dockerfile.agent .
+# ─────────────────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS base
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+# ffmpeg is required to decode Edge TTS MP3 audio; ca-certificates for TLS.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY agent/requirements.txt ./requirements.txt
+RUN pip install -r requirements.txt
+
+COPY agent/ ./
+
+# Pre-download the Silero VAD + turn-detector models at build time so the
+# first job doesn't pay the download cost (and works offline-ish on Akash).
+RUN python -m agent.main download-files || true
+
+# Two roles share this image: the worker and the token server.
+# Override CMD in compose / SDL for the token server.
+CMD ["python", "-m", "agent.main", "start"]

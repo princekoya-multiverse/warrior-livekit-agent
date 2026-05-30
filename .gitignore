@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+agent/.venv/
+*.egg-info/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# Env / secrets
+.env
+.env.local
+*.local
+keys.env
+*.key
+*.pem
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Auto-generated markdown preview sidecars
+docs/*.docx
+docs/*.pdf
+agent/prompts/*.docx
+agent/prompts/*.pdf

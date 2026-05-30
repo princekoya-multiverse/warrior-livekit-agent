@@ -1,0 +1,11 @@
+# Warrior B.O.S.S. agent worker dependencies
+# Pinned to the LiveKit Agents 1.x line validated during development.
+
+livekit-agents[silero,deepgram,openai,turn-detector]~=1.5
+livekit-api~=1.0
+edge-tts>=7.0.0
+
+# Token server
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6

@@ -1,0 +1,164 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Akash SDL (Stack Definition Language) — Warrior B.O.S.S. Phase 1
+#
+# Deploys 4 services within budget: ~3.5 vCPU / 4.5 GB RAM total.
+#   livekit-server : WebRTC SFU (global TCP + UDP media)
+#   token-server   : LiveKit token minting API
+#   agent          : Python voice agent worker
+#   frontend       : Nginx SPA + /api proxy
+#
+# Before deploying:
+#   1. Build & push images to a registry (see docs/akash-deployment.md).
+#   2. Replace the `image:` fields below with your pushed image refs.
+#   3. Fill secrets in the `env` blocks (or use Akash provider env injection).
+# ─────────────────────────────────────────────────────────────────────────
+---
+version: "2.0"
+
+services:
+  livekit-server:
+    image: livekit/livekit-server:v1.8
+    args:
+      - --config
+      - /etc/livekit.yaml
+    env:
+      # Inject keys here (apikey: secret). Generated via generate-keys.sh.
+      - "LIVEKIT_KEYS=REPLACE_KEY: REPLACE_SECRET"
+    expose:
+      - port: 7880
+        as: 7880
+        proto: tcp
+        to:
+          - global: true
+      - port: 7881
+        as: 7881
+        proto: tcp
+        to:
+          - global: true
+      - port: 50000
+        as: 50000
+        proto: udp
+        to:
+          - global: true
+      # NOTE: Akash exposes single ports; for the full media range advertise
+      # the range in rtc config and expose representative ports. Many WebRTC
+      # deployments rely on TCP fallback (7881) + TURN when UDP is limited.
+
+  token-server:
+    image: REPLACE_REGISTRY/warrior-agent:latest
+    command:
+      - uvicorn
+    args:
+      - agent.token_server:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8080"
+    env:
+      - "LIVEKIT_API_KEY=REPLACE_KEY"
+      - "LIVEKIT_API_SECRET=REPLACE_SECRET"
+      - "LIVEKIT_PUBLIC_URL=wss://livekit.warriorworld.life"
+      - "TOKEN_SERVER_CORS=https://warriorworld.life"
+    expose:
+      - port: 8080
+        as: 8080
+        proto: tcp
+        to:
+          - global: true
+
+  agent:
+    image: REPLACE_REGISTRY/warrior-agent:latest
+    command:
+      - python
+    args:
+      - -m
+      - agent.main
+      - start
+    env:
+      - "LIVEKIT_URL=ws://livekit-server:7880"
+      - "LIVEKIT_API_KEY=REPLACE_KEY"
+      - "LIVEKIT_API_SECRET=REPLACE_SECRET"
+      - "ABACUS_API_KEY=REPLACE_ABACUS_KEY"
+      - "ABACUS_BASE_URL=https://routellm.abacus.ai/v1"
+      - "ABACUS_MODEL=route-llm"
+      - "STT_PROVIDER=deepgram"
+      - "DEEPGRAM_API_KEY=REPLACE_DEEPGRAM_KEY"
+      - "TTS_VOICE=en-US-GuyNeural"
+
+  frontend:
+    image: REPLACE_REGISTRY/warrior-frontend:latest
+    expose:
+      - port: 80
+        as: 80
+        proto: tcp
+        to:
+          - global: true
+
+profiles:
+  compute:
+    livekit-server:
+      resources:
+        cpu:
+          units: 1.5
+        memory:
+          size: 1.5Gi
+        storage:
+          size: 1Gi
+    token-server:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 512Mi
+        storage:
+          size: 512Mi
+    agent:
+      resources:
+        cpu:
+          units: 1.0
+        memory:
+          size: 2Gi
+        storage:
+          size: 2Gi
+    frontend:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 512Mi
+        storage:
+          size: 512Mi
+
+  placement:
+    akash:
+      pricing:
+        livekit-server:
+          denom: uakt
+          amount: 10000
+        token-server:
+          denom: uakt
+          amount: 5000
+        agent:
+          denom: uakt
+          amount: 10000
+        frontend:
+          denom: uakt
+          amount: 5000
+
+deployment:
+  livekit-server:
+    akash:
+      profile: livekit-server
+      count: 1
+  token-server:
+    akash:
+      profile: token-server
+      count: 1
+  agent:
+    akash:
+      profile: agent
+      count: 1
+  frontend:
+    akash:
+      profile: frontend
+      count: 1
