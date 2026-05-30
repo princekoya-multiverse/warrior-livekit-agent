@@ -23,8 +23,21 @@ keys.env
 .idea/
 .vscode/
 
-# Auto-generated markdown preview sidecars
-docs/*.docx
-docs/*.pdf
-agent/prompts/*.docx
-agent/prompts/*.pdf
+# Auto-generated markdown preview sidecars (keep the .md sources, ignore exports)
+*.docx
+*.pdf
+frontend/*.tsbuildinfo
+
+# Platform marker
+.abacus.donotdelete
+
+# Python caches / build
+*.pyo
+*.pyd
+build/
+dist/
+*.log
+
+# Misc env files
+.env.*
+!.env.example
