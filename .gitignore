@@ -41,3 +41,7 @@ dist/
 # Misc env files
 .env.*
 !.env.example
+
+# Production Akash manifest with live secrets (use deploy.example.yaml as template)
+deploy.yaml
+.env.production
