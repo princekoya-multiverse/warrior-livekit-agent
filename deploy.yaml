@@ -45,7 +45,7 @@ services:
       # deployments rely on TCP fallback (7881) + TURN when UDP is limited.
 
   token-server:
-    image: REPLACE_REGISTRY/warrior-agent:latest
+    image: ghcr.io/princekoya-multiverse/warrior-agent:latest
     command:
       - uvicorn
     args:
@@ -67,7 +67,7 @@ services:
           - global: true
 
   agent:
-    image: REPLACE_REGISTRY/warrior-agent:latest
+    image: ghcr.io/princekoya-multiverse/warrior-agent:latest
     command:
       - python
     args:
@@ -86,7 +86,7 @@ services:
       - "TTS_VOICE=en-US-GuyNeural"
 
   frontend:
-    image: REPLACE_REGISTRY/warrior-frontend:latest
+    image: ghcr.io/princekoya-multiverse/warrior-frontend:latest
     expose:
       - port: 80
         as: 80
