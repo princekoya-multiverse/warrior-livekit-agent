@@ -64,6 +64,11 @@ ABACUS_API_KEY = _env("ABACUS_API_KEY") or _read_abacus_key_from_secrets()
 # RouteLLM model alias. "route-llm" auto-routes to a strong general model.
 ABACUS_MODEL = _env("ABACUS_MODEL", "route-llm")
 
+# Optional DeepSeek (free for us, OpenAI-compatible).
+DEEPSEEK_API_KEY = _env("DEEPSEEK_API_KEY")
+DEEPSEEK_BASE_URL = _env("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+DEEPSEEK_MODEL = _env("DEEPSEEK_MODEL", "deepseek-chat")
+
 # Optional OpenAI fallback (only used if explicitly configured).
 OPENAI_API_KEY = _env("OPENAI_API_KEY")
 
@@ -120,9 +125,9 @@ def build_system_prompt() -> str:
 def validate() -> list[str]:
     """Return a list of human-readable configuration problems (empty == ok)."""
     problems: list[str] = []
-    if not ABACUS_API_KEY and not OPENAI_API_KEY:
+    if not ABACUS_API_KEY and not OPENAI_API_KEY and not DEEPSEEK_API_KEY:
         problems.append(
-            "No LLM key found: set ABACUS_API_KEY (or OPENAI_API_KEY)."
+            "No LLM key found: set ABACUS_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY."
         )
     if STT_PROVIDER == "deepgram" and not DEEPGRAM_API_KEY:
         problems.append(

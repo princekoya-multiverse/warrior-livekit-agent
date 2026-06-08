@@ -46,23 +46,29 @@ class WarriorAgent(Agent):
 
 
 def _build_llm() -> openai.LLM:
-    """Construct an OpenAI-compatible LLM client pointed at Abacus AI.
+    """Construct an OpenAI-compatible LLM client.
 
-    Falls back to OpenAI proper only if ABACUS is not configured but an
-    OPENAI_API_KEY is present.
+    Priority: DeepSeek > Abacus AI > OpenAI.
+    All three expose OpenAI-compatible chat completions APIs.
     """
+    if config.DEEPSEEK_API_KEY:
+        logger.info("LLM: DeepSeek (%s)", config.DEEPSEEK_MODEL)
+        return openai.LLM(
+            model=config.DEEPSEEK_MODEL,
+            api_key=config.DEEPSEEK_API_KEY,
+            base_url=config.DEEPSEEK_BASE_URL,
+        )
     if config.ABACUS_API_KEY:
         logger.info("LLM: Abacus AI RouteLLM (%s)", config.ABACUS_MODEL)
         return openai.LLM(
             model=config.ABACUS_MODEL,
             api_key=config.ABACUS_API_KEY,
             base_url=config.ABACUS_BASE_URL,
-            temperature=0.6,
         )
     if config.OPENAI_API_KEY:
         logger.info("LLM: OpenAI fallback")
         return openai.LLM(model="gpt-4o-mini", api_key=config.OPENAI_API_KEY)
-    raise RuntimeError("No LLM key configured (ABACUS_API_KEY or OPENAI_API_KEY).")
+    raise RuntimeError("No LLM key configured.")
 
 
 def _build_stt():
