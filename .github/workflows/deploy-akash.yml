@@ -1,0 +1,240 @@
+# ────────────────────────────────────────────────────────────────────────────
+# Akash Network Deploy — GitOps-style CD pipeline
+#
+# Triggered after the Build & Push Images workflow completes on main, or
+# manually via workflow_dispatch.
+#
+# Flow:
+#   1. Resolve chain-id from Akash mainnet
+#   2. Render deploy.yaml from deploy.example.yaml with repo secrets
+#   3. Import deployer wallet from mnemonic
+#   4. Submit deployment → poll for bids → accept lowest bid → send manifest
+#
+# Required secrets:
+#   AKASH_MNEMONIC        — wallet seed phrase
+#   LIVEKIT_API_KEY       — LiveKit API key
+#   LIVEKIT_API_SECRET    — LiveKit API secret
+#   ABACUS_API_KEY        — Abacus/RouteLLM key
+#   DEEPGRAM_API_KEY      — Deepgram STT key
+#   LIVEKIT_PUBLIC_URL    — (optional) public LiveKit WebSocket URL
+#   TOKEN_SERVER_CORS     — (optional) CORS origin for token server
+# ────────────────────────────────────────────────────────────────────────────
+name: Deploy to Akash
+
+on:
+  workflow_run:
+    workflows: ["Build & Push Images to GHCR + Docker Hub"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: akash-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AKASH_NET: "https://raw.githubusercontent.com/akash-network/net/master/mainnet"
+  AKASH_NODE: "https://akash-rpc.polkachu.com"
+  AKASH_GAS: "auto"
+  AKASH_GAS_ADJUSTMENT: "1.25"
+  AKASH_GAS_PRICES: "0.025uakt"
+  AKASH_KEYRING_BACKEND: "test"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 1. Resolve Akash network parameters ─────────────────────────────
+      - name: Resolve chain-id & CLI version
+        id: akash-net
+        run: |
+          VERSION=$(curl -s "$AKASH_NET/version.txt" | tr -d '[:space:]')
+          CHAIN_ID=$(curl -s "$AKASH_NET/chain-id.txt" | tr -d '[:space:]')
+          echo "version=$VERSION"   >> "$GITHUB_OUTPUT"
+          echo "chain-id=$CHAIN_ID" >> "$GITHUB_OUTPUT"
+          echo "Resolved: chain=$CHAIN_ID  cli-version=$VERSION"
+
+      # ── 2. Render deploy.yaml from template ─────────────────────────────
+      - name: Render deploy.yaml
+        env:
+          LK_KEY:   ${{ secrets.LIVEKIT_API_KEY }}
+          LK_SEC:   ${{ secrets.LIVEKIT_API_SECRET }}
+          ABACUS:   ${{ secrets.ABACUS_API_KEY }}
+          DEEPGRAM: ${{ secrets.DEEPGRAM_API_KEY }}
+          LK_URL:   ${{ secrets.LIVEKIT_PUBLIC_URL || 'wss://livekit.warriorworld.life' }}
+          CORS:     ${{ secrets.TOKEN_SERVER_CORS || 'https://warriorworld.life' }}
+        run: |
+          cp deploy.example.yaml deploy.yaml
+          sed -i "s|REPLACE_KEY: REPLACE_SECRET|$LK_KEY: $LK_SEC|" deploy.yaml
+          sed -i "s|LIVEKIT_API_KEY=REPLACE_KEY|LIVEKIT_API_KEY=$LK_KEY|" deploy.yaml
+          sed -i "s|LIVEKIT_API_SECRET=REPLACE_SECRET|LIVEKIT_API_SECRET=$LK_SEC|" deploy.yaml
+          sed -i "s|ABACUS_API_KEY=REPLACE_ABACUS_KEY|ABACUS_API_KEY=$ABACUS|" deploy.yaml
+          sed -i "s|DEEPGRAM_API_KEY=REPLACE_DEEPGRAM_KEY|DEEPGRAM_API_KEY=$DEEPGRAM|" deploy.yaml
+          sed -i "s|LIVEKIT_PUBLIC_URL=.*|LIVEKIT_PUBLIC_URL=$LK_URL|" deploy.yaml
+          sed -i "s|TOKEN_SERVER_CORS=.*|TOKEN_SERVER_CORS=$CORS|" deploy.yaml
+          echo "deploy.yaml rendered (env vars patched)"
+
+      # ── 3. Import wallet ────────────────────────────────────────────────
+      - name: Import Akash wallet
+        id: wallet
+        run: |
+          CLI_TAG="${{ steps.akash-net.outputs.version }}"
+          CLI="docker run --rm -v $PWD:/workspace -w /workspace \
+            ghcr.io/akash-network/akash-cli:$CLI_TAG"
+
+          # Import mnemonic via stdin
+          echo "${{ secrets.AKASH_MNEMONIC }}" | $CLI keys add deployer \
+            --recover --keyring-backend "$AKASH_KEYRING_BACKEND" -y 2>&1
+
+          ADDR=$($CLI keys show deployer --address \
+            --keyring-backend "$AKASH_KEYRING_BACKEND" 2>/dev/null)
+          echo "address=$ADDR" >> "$GITHUB_OUTPUT"
+          echo "Wallet imported: $ADDR"
+
+      # ── 4. Create deployment ────────────────────────────────────────────
+      - name: Create Akash deployment
+        id: create-deploy
+        run: |
+          CLI_TAG="${{ steps.akash-net.outputs.version }}"
+          CLI="docker run --rm -v $PWD:/workspace -w /workspace \
+            ghcr.io/akash-network/akash-cli:$CLI_TAG"
+
+          $CLI tx deployment create deploy.yaml \
+            --from deployer \
+            --node "$AKASH_NODE" \
+            --chain-id "${{ steps.akash-net.outputs.chain-id }}" \
+            --keyring-backend "$AKASH_KEYRING_BACKEND" \
+            --gas "$AKASH_GAS" \
+            --gas-adjustment "$AKASH_GAS_ADJUSTMENT" \
+            --gas-prices "$AKASH_GAS_PRICES" \
+            --fees 5000uakt \
+            -y \
+            --output json 2>&1 | tee /tmp/akash-deploy-result.json
+
+          # Parse dseq from result
+          python3 -c "
+import json, re, sys
+with open('/tmp/akash-deploy-result.json') as f:
+    raw = json.load(f)
+log = raw.get('raw_log', '')
+m = re.search(r'dseq[^0-9]*(\d+)', str(log))
+if m:
+    dseq = m.group(1)
+    print(f'dseq={dseq}')
+    sys.exit(0)
+# Try events
+for ev in raw.get('events', []):
+    for attr in ev.get('attributes', []):
+        if attr.get('key','').endswith('dseq') or attr.get('key','').endswith('.dseq'):
+            print(f'dseq={attr[\"value\"]}')
+            sys.exit(0)
+print('dseq=UNKNOWN')
+" 2>&1 | tee -a "$GITHUB_OUTPUT"
+
+      # ── 5. Wait for bids & accept ───────────────────────────────────────
+      - name: Wait & accept bid
+        id: lease
+        timeout-minutes: 20
+        env:
+          DSEQ: ${{ steps.create-deploy.outputs.dseq }}
+          ADDR: ${{ steps.wallet.outputs.address }}
+          CID:  ${{ steps.akash-net.outputs.chain-id }}
+        run: |
+          CLI_TAG="${{ steps.akash-net.outputs.version }}"
+          CLI="docker run --rm -v $PWD:/workspace -w /workspace \
+            ghcr.io/akash-network/akash-cli:$CLI_TAG"
+
+          for i in $(seq 1 40); do
+            echo "--- Polling for bids ($i / 40) ---"
+            BIDS=$($CLI query market bid list \
+              --owner "$ADDR" --dseq "$DSEQ" \
+              --node "$AKASH_NODE" -o json 2>/dev/null || echo '{}')
+
+            PROVIDER=$(echo "$BIDS" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+bids=d.get('bids',[])
+for b in bids:
+    bd=b.get('bid',b)
+    if bd.get('state','').lower()=='active':
+        print(bd.get('provider',''))
+        break
+")
+            if [ -n "$PROVIDER" ]; then
+              echo "Active bid from: $PROVIDER"
+              echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
+
+              $CLI tx market lease create \
+                --from deployer \
+                --owner "$ADDR" --dseq "$DSEQ" --provider "$PROVIDER" \
+                --node "$AKASH_NODE" --chain-id "$CID" \
+                --keyring-backend "$AKASH_KEYRING_BACKEND" \
+                --gas "$AKASH_GAS" --gas-adjustment "$AKASH_GAS_ADJUSTMENT" \
+                --gas-prices "$AKASH_GAS_PRICES" --fees 5000uakt \
+                -y --output json 2>&1
+
+              echo "Lease created on $PROVIDER"
+              echo "dseq=$DSEQ" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "No active bid in 20 minutes — aborting"
+          exit 1
+
+      # ── 6. Send manifest ────────────────────────────────────────────────
+      - name: Send manifest
+        run: |
+          CLI_TAG="${{ steps.akash-net.outputs.version }}"
+          CLI="docker run --rm -v $PWD:/workspace -w /workspace \
+            ghcr.io/akash-network/akash-cli:$CLI_TAG"
+
+          $CLI provider send-manifest deploy.yaml \
+            --node "$AKASH_NODE" \
+            --dseq "${{ steps.lease.outputs.dseq }}" \
+            --provider "${{ steps.lease.outputs.provider }}" \
+            --from deployer \
+            --keyring-backend "$AKASH_KEYRING_BACKEND" \
+            -o json 2>&1
+
+      # ── 7. Verify & summary ─────────────────────────────────────────────
+      - name: Verify deployment status
+        run: |
+          CLI_TAG="${{ steps.akash-net.outputs.version }}"
+          CLI="docker run --rm -v $PWD:/workspace -w /workspace \
+            ghcr.io/akash-network/akash-cli:$CLI_TAG"
+
+          echo "--- Lease Status ---"
+          $CLI provider lease-status \
+            --node "$AKASH_NODE" \
+            --dseq "${{ steps.lease.outputs.dseq }}" \
+            --provider "${{ steps.lease.outputs.provider }}" \
+            --from deployer \
+            --keyring-backend "$AKASH_KEYRING_BACKEND" \
+            -o json 2>&1
+
+      - name: Deployment summary
+        run: |
+          cat <<SUMF >> "$GITHUB_STEP_SUMMARY"
+## ✅ Akash Deployment
+
+| Detail | Value |
+|--------|-------|
+| DSEQ | \`${{ steps.lease.outputs.dseq }}\` |
+| Provider | \`${{ steps.lease.outputs.provider }}\` |
+| Branch | \`${{ github.ref_name }}\` |
+| Commit | \`${{ github.sha }}\` |
+
+### Services
+- **livekit-server** — WebRTC SFU
+- **token-server** — Token minting API
+- **agent** — Voice AI worker
+- **frontend** — Nginx + React SPA
+SUMF
